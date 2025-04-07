@@ -13,6 +13,19 @@ UART_BAUDRATE = 115200
 MAV_system_id = 1
 MAV_component_id = 197 # Visual inertial odometry
 packet_sequence = 0
+MAV_LANDING_TARGET_message_id = 149
+MAV_LANDING_TARGET_min_distance = 1 / 100  # in meters
+MAV_LANDING_TARGET_max_distance = 10000 / 100  # in meters
+MAV_LANDING_TARGET_frame = 8  # MAV_FRAME_BODY_NED
+MAV_LANDING_TARGET_extra_crc = 200
+
+MAV_HEARTBEAT_message_id = 0
+MAV_HEARTBEAT_extra_crc = 50  # from MAVLink v1.0 spec
+MAV_type = 18  # MAV_TYPE_ONBOARD_CONTROLLER
+MAV_autopilot = 8  # MAV_AUTOPILOT_INVALID
+MAV_mode = 0
+MAV_custom_mode = 0
+MAV_state = 4  # MAV_STATE_ACTIVE
 
 sensor_num_pixels_w = 1616 # 1600
 sensor_num_pixels_h = 1232 # 1200
@@ -68,11 +81,35 @@ def checksum(data, extra):
     return output
 
 
-MAV_LANDING_TARGET_message_id = 149
-MAV_LANDING_TARGET_min_distance = 1 / 100  # in meters
-MAV_LANDING_TARGET_max_distance = 10000 / 100  # in meters
-MAV_LANDING_TARGET_frame = 8  # MAV_FRAME_BODY_NED
-MAV_LANDING_TARGET_extra_crc = 200
+
+def send_heartbeat():
+    global packet_sequence
+    payload = struct.pack("<IBBBBB", MAV_custom_mode, MAV_type, MAV_autopilot, MAV_mode, 0, MAV_state)
+    msg_id = MAV_HEARTBEAT_message_id  # 0
+
+    # MAVLink 2 header (10 bytes)
+    header = struct.pack(
+        "<BBBBBB3B",  # total 10 bytes
+        0xFD,                   # magic
+        len(payload),           # payload length
+        0x00,                   # incompat_flags (set to 0)
+        0x00,                   # compat_flags (set to 0)
+        packet_sequence & 0xFF, # sequence
+        MAV_system_id,          # system ID
+        MAV_component_id,       # component ID
+        msg_id & 0xFF,          # message ID (3 bytes)
+        (msg_id >> 8) & 0xFF,
+        (msg_id >> 16) & 0xFF
+    )
+
+    crc = checksum(payload + header[1+6:], MAV_HEARTBEAT_extra_crc)  # Use only msgid from header
+    full_packet = header + payload + struct.pack("<H", crc)
+
+    uart.write(full_packet)
+    print("Sent MAVLink2 heartbeat")
+    packet_sequence += 1
+
+
 
 
 # http://mavlink.org/messages/common#LANDING_TARGET
@@ -132,9 +169,14 @@ def update_led(target_found):
 
 
 # Main Loop
-
+last_heartbeat_time = time.ticks_ms()
 clock = time.clock()
 while True:
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_heartbeat_time) >= 1000:
+        send_heartbeat()
+        last_heartbeat_time = now
+
     clock.tick()
     img = sensor.snapshot()
     tags = sorted(
