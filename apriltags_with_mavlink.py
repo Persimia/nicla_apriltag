@@ -7,9 +7,17 @@ import machine
 from machine import I2C
 from vl53l1x import VL53L1X
 
+import pymavminimal as mav
+
+mavlink = mav.MAVLink(None)
+
+# Set system/component ID
+mavlink.srcSystem = 1
+mavlink.srcComponent = 197
+
 tof = VL53L1X(I2C(2))
 
-UART_BAUDRATE = 115200
+UART_BAUDRATE = 57600
 MAV_system_id = 1
 MAV_component_id = 197 # Visual inertial odometry
 packet_sequence = 0
@@ -65,7 +73,9 @@ def translation_to_mm(translation, tag_size):
     return ((translation * 100) * tag_size) / 210
 
 # Link Setup
-uart = machine.UART(9, UART_BAUDRATE, timeout_char=1000)
+uart = machine.UART(9, UART_BAUDRATE)
+uart.init(UART_BAUDRATE, bits=8, parity=None, stop=0) # init with given parameters
+
 
 
 # https://github.com/mavlink/c_library_v1/blob/master/checksum.h
@@ -81,35 +91,27 @@ def checksum(data, extra):
     return output
 
 
-
 def send_heartbeat():
-    global packet_sequence
-    payload = struct.pack("<IBBBBB", MAV_custom_mode, MAV_type, MAV_autopilot, MAV_mode, 0, MAV_state)
-    msg_id = MAV_HEARTBEAT_message_id  # 0
+    led_success.on()
+    # led_fail.off()
+    # msg = mavlink.named_value_float_encode(time.ticks_ms(), "HELPME", 12346)
+    # uart.write(msg.pack(mavlink))
 
-    # MAVLink 2 header (10 bytes)
-    header = struct.pack(
-        "<BBBBBB3B",  # total 10 bytes
-        0xFD,                   # magic
-        len(payload),           # payload length
-        0x00,                   # incompat_flags (set to 0)
-        0x00,                   # compat_flags (set to 0)
-        packet_sequence & 0xFF, # sequence
-        MAV_system_id,          # system ID
-        MAV_component_id,       # component ID
-        msg_id & 0xFF,          # message ID (3 bytes)
-        (msg_id >> 8) & 0xFF,
-        (msg_id >> 16) & 0xFF
+    msg = mavlink.heartbeat_encode(
+        mav.MAV_TYPE_ONBOARD_CONTROLLER,         # type
+        8,    # autopilot
+        0,    # base_mode
+        0,    # custom_mode
+        4,    # system_status
     )
-
-    crc = checksum(payload + header[1+6:], MAV_HEARTBEAT_extra_crc)  # Use only msgid from header
-    full_packet = header + payload + struct.pack("<H", crc)
-
-    uart.write(full_packet)
-    print("Sent MAVLink2 heartbeat")
-    packet_sequence += 1
-
-
+    full_packet = msg.pack(mavlink)
+    uart.write(msg.pack(mavlink))
+    while not uart.txdone():
+        pass
+    # uart.flush()
+    print(''.join('%02x'%i for i in full_packet))
+    led_success.off()
+    # led_fail.on()
 
 
 # http://mavlink.org/messages/common#LANDING_TARGET
@@ -167,38 +169,59 @@ def update_led(target_found):
 
     led_counter += 1
 
-
+print(machine.reset_cause())
 # Main Loop
-last_heartbeat_time = time.ticks_ms()
 clock = time.clock()
+last_hb_time = time.ticks_ms()
 while True:
-    now = time.ticks_ms()
-    if time.ticks_diff(now, last_heartbeat_time) >= 1000:
-        send_heartbeat()
-        last_heartbeat_time = now
+    # current_time = time.ticks_ms()
+    # if current_time - last_hb_time >= 1000:
+    #     send_heartbeat()
+    #     print(current_time - last_hb_time)
+    #     last_hb_time = current_time
+    time.sleep_ms(1000)
+    send_heartbeat()
+    # if uart.any():
+    #     uart.read()
 
-    clock.tick()
-    img = sensor.snapshot()
-    tags = sorted(
-        img.find_apriltags(fx=f_x, fy=f_y, cx=c_x, cy=c_y),
-        key=lambda x: x.w * x.h,
-        reverse=True,
-    )
-    target_found = False
-    if tags and (tags[0].id in valid_tag_ids):
-        target_found = True
-        tag_size = valid_tag_ids[tags[0].id]
-        dist_mm = math.sqrt(
-            translation_to_mm(tags[0].x_translation, tag_size) ** 2
-            + translation_to_mm(tags[0].y_translation, tag_size) ** 2
-            + translation_to_mm(tags[0].z_translation, tag_size) ** 2
-        )
-        send_landing_target_packet(tags[0], dist_mm, img.width(), img.height())
-        img.draw_rectangle(tags[0].rect)
-        img.draw_cross(tags[0].cx, tags[0].cy)
-        true_dist = tof.read()
-        print("ATd %f mm, Td %f mm - FPS %f" % (dist_mm, true_dist, clock.fps()))
-    else:
-        print("FPS %f" % clock.fps())
+    # clock.tick()
+    # img = sensor.snapshot()
+    # tags = sorted(
+    #     img.find_apriltags(fx=f_x, fy=f_y, cx=c_x, cy=c_y),
+    #     key=lambda x: x.w * x.h,
+    #     reverse=True,
+    # )
+    # target_found = False
+    # if tags and (tags[0].id in valid_tag_ids):
+    #     target_found = True
+    #     tag_size = valid_tag_ids[tags[0].id]
+    #     dist_mm = math.sqrt(
+    #         translation_to_mm(tags[0].x_translation, tag_size) ** 2
+    #         + translation_to_mm(tags[0].y_translation, tag_size) ** 2
+    #         + translation_to_mm(tags[0].z_translation, tag_size) ** 2
+    #     )
+    #     send_landing_target_packet(tags[0], dist_mm, img.width(), img.height())
+    #     img.draw_rectangle(tags[0].rect)
+    #     img.draw_cross(tags[0].cx, tags[0].cy)
+    #     true_dist = tof.read()
+    #     print("ATd %f mm, Td %f mm - FPS %f" % (dist_mm, true_dist, clock.fps()))
+    # else:
+    #     print("FPS %f" % clock.fps())
 
-    update_led(target_found)
+    # # update_led(target_found)
+    # seen_heartbeat = False
+    # num = uart.any()
+    # # Receive data and process into MAVLink packets
+    # if num > 0:
+    #     try:
+    #         rxData = uart.read(num)
+    #         # print('.'.join('%02x' % b for b in rxData))
+    #         pkts = mavlink.parse_buffer(bytearray(rxData))
+    #         if pkts is not None:
+    #             for pkt in pkts:
+    #                 if pkt.get_type() == 'HEARTBEAT' and pkt.type not in [mav.MAV_TYPE_GCS, mav.MAV_TYPE_ADSB, mav.MAV_TYPE_GIMBAL, mav.MAV_TYPE_ONBOARD_CONTROLLER]:
+    #                     if not seen_heartbeat:
+    #                         print("Got heartbeat from {0}:{1}".format(pkt.get_srcSystem(), pkt.get_srcComponent()))
+    #                         seen_heartbeat = True
+    #     except:
+    #         print("unable to decode")
