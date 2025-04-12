@@ -13,7 +13,6 @@ uart.init(UART_BAUDRATE, bits=8, parity=None, stop=1)
 mavlink = pymav.MAVLink(None)
 mavlink.srcSystem = 1
 mavlink.srcComponent = 197
-
 MAV_system_id = 1
 MAV_component_id = 197 # Visual inertial odometry
 packet_sequence = 0
@@ -22,7 +21,6 @@ MAV_LANDING_TARGET_min_distance = 1 / 100  # in meters
 MAV_LANDING_TARGET_max_distance = 10000 / 100  # in meters
 MAV_LANDING_TARGET_frame = 8  # MAV_FRAME_BODY_NED
 MAV_LANDING_TARGET_extra_crc = 200
-
 MAV_FRAME_BODY_FRD = 12
 LANDING_TARGET_TYPE_VISION_FIDUCIAL = 2
 
@@ -46,6 +44,12 @@ valid_tag_ids = {
     0: 150,  # 8.5" x 11" tag black border size in mm
     1: 77.5,  # 8.5" x 11" tag black border size in mm
     2: 34.5,  # 8.5" x 11" tag black border size in mm
+}
+
+tag_offsets_mm = {
+    0: (-21.25, 104.25, 0),
+    1: (-67, -23.5, 0),
+    2: (0, 0, 0),
 }
 
 
@@ -127,13 +131,65 @@ def update_led(target_found):
 
     led_counter += 1
 
+def get_target_center_FRD_mm(tag):
+    tag_size = valid_tag_ids[tags[0].id]
 
-def convert_apriltag_camera_frame_to_FRD(x,y,z):
-    pass
+    # Euler angles in radians
+    rx = tag.x_rotation - math.pi
+    ry = tag.y_rotation
+    rz = tag.z_rotation
 
-def send_landing_target(target_num, x, y, z):
+    # Build rotation matrix from Euler angles (assuming XYZ rotation order)
+    # First compute cosines and sines
+    cx = math.cos(rx)
+    sx = math.sin(rx)
+    cy = math.cos(ry)
+    sy = math.sin(ry)
+    cz = math.cos(rz)
+    sz = math.sin(rz)
+
+    # Rotation matrix R = Rz * Ry * Rx
+    R = [
+        [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx],
+        [sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx],
+        [-sy,   cy*sx,             cy*cx]
+    ]
+
+    # Offset from tag to center (in tag's frame)
+    dx, dy, dz = tag_offsets_mm[tag.id]
+
+    # Transform to camera space: R' * offset
+    cx = R[0][0]*dx + R[1][0]*dy + R[2][0]*dz
+    cy = R[0][1]*dx + R[1][1]*dy + R[2][1]*dz
+    cz = R[0][2]*dx + R[1][2]*dy + R[2][2]*dz
+
+    # print(f"ROT x{rx}, y{ry}, z{rz}")
+    # print(f"OFF x{cx}, y{cy}, z{cz}")
+    # print(f"IMG x{translation_to_mm(tags[0].x_translation, tag_size)}, y{translation_to_mm(tags[0].y_translation, tag_size)}, z{translation_to_mm(tags[0].z_translation, tag_size)}")
+
+    # Add translation from tag to camera
+    cx += translation_to_mm(tags[0].x_translation, tag_size)
+    cy += translation_to_mm(tags[0].y_translation, tag_size)
+    cz += translation_to_mm(tags[0].z_translation, tag_size)
+
+    print(f"COR x{cx}, y{cy}, z{cz}")
+
+    # Convert camera frame to FRD
+    frd_x_mm = cx
+    frd_y_mm = cy
+    frd_z_mm = -cz
+
+    dist_mm = math.sqrt(
+        translation_to_mm(tags[0].x_translation, tag_size) ** 2
+        + translation_to_mm(tags[0].y_translation, tag_size) ** 2
+        + translation_to_mm(tags[0].z_translation, tag_size) ** 2
+    )
+
+    return frd_x_mm, frd_y_mm, frd_z_mm, dist_mm
+
+
+def send_landing_target(target_num, x, y, z, distance):
     led_fail.on()
-    distance = math.sqrt(x**2 + y**2 + z**2)
     # try:
     msg = mavlink.landing_target_encode(
         time.ticks_us(),
@@ -159,7 +215,6 @@ def send_landing_target(target_num, x, y, z):
     # except Exception as e:
     #     print("Error sending landing target:", e)
     # finally:
-    print(f"x: {x}, y: {y}, z: {z}")
     led_fail.off()
 
 # Main Loop
@@ -183,43 +238,17 @@ while True:
     target_found = False
     if tags and (tags[0].id in valid_tag_ids):
         target_found = True
-        tag_size = valid_tag_ids[tags[0].id]
 
-        # send_landing_target_packet(tags[0], dist_mm, img.width(), img.height())
-        send_landing_target(
-            tags[0].id,
-            translation_to_mm(tags[0].x_translation, tag_size),
-            translation_to_mm(tags[0].y_translation, tag_size),
-            translation_to_mm(tags[0].z_translation, tag_size),
-        )
+        x, y, z, distance = get_target_center_FRD_mm(tags[0])
+        send_landing_target(tags[0].id, x, y, z, distance)
+
         img.draw_rectangle(tags[0].rect)
         img.draw_cross(tags[0].cx, tags[0].cy)
         true_dist = tof.read()
-        dist_mm = math.sqrt(
-            translation_to_mm(tags[0].x_translation, tag_size) ** 2
-            + translation_to_mm(tags[0].y_translation, tag_size) ** 2
-            + translation_to_mm(tags[0].z_translation, tag_size) ** 2
-        )
+
     else:
-        print("FPS %f" % clock.fps())
+        # print("FPS %f" % clock.fps())
+        pass
 
 
     machine.idle()
-
-    # # update_led(target_found)
-    # seen_heartbeat = False
-    # num = uart.any()
-    # # Receive data and process into MAVLink packets
-    # if num > 0:
-    #     try:
-    #         rxData = uart.read(num)
-    #         # print('.'.join('%02x' % b for b in rxData))
-    #         pkts = mavlink.parse_buffer(bytearray(rxData))
-    #         if pkts is not None:
-    #             for pkt in pkts:
-    #                 if pkt.get_type() == 'HEARTBEAT' and pkt.type not in [pymav.MAV_TYPE_GCS, pymav.MAV_TYPE_ADSB, pymav.MAV_TYPE_GIMBAL, pymav.MAV_TYPE_ONBOARD_CONTROLLER]:
-    #                     if not seen_heartbeat:
-    #                         print("Got heartbeat from {0}:{1}".format(pkt.get_srcSystem(), pkt.get_srcComponent()))
-    #                         seen_heartbeat = True
-    #     except:
-    #         print("unable to decode")
