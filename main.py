@@ -1,8 +1,16 @@
+"""
+Todo:
+- rewrite matrix math with ulab
+- fix coordinate transformation issue
+"""
+
 import math, sensor, time, machine, image
 import pymavminimal as pymav
 from machine import I2C
 from vl53l1x import VL53L1X
 from pyb import Timer
+from ulab import numpy as np
+from math import sin, cos
 
 # Setup UART
 UART_BAUDRATE = 256000
@@ -94,6 +102,37 @@ def send_heartbeat():
 led_success = machine.LED("LED_GREEN")
 led_fail = machine.LED("LED_RED")
 
+def euler_zyx_matrix(roll, pitch, yaw):
+    """
+    Generate a rotation matrix using ZYX Euler angles (in radians).
+    - roll: rotation about X (φ)
+    - pitch: rotation about Y (θ)
+    - yaw: rotation about Z (ψ)
+    """
+    # Rotation around X (roll)
+    Rx = np.array([
+        [1, 0, 0],
+        [0, cos(roll), -sin(roll)],
+        [0, sin(roll), cos(roll)]
+    ])
+
+    # Rotation around Y (pitch)
+    Ry = np.array([
+        [cos(pitch), 0, sin(pitch)],
+        [0, 1, 0],
+        [-sin(pitch), 0, cos(pitch)]
+    ])
+
+    # Rotation around Z (yaw)
+    Rz = np.array([
+        [cos(yaw), -sin(yaw), 0],
+        [sin(yaw), cos(yaw), 0],
+        [0, 0, 1]
+    ])
+
+    # Combined rotation matrix: R = Rz * Ry * Rx
+    return np.dot(Rz, np.dot(Ry, Rx))
+
 def get_target_center_FRD_mm(tag):
     tag_size = valid_tag_ids[tag.id]
 
@@ -117,6 +156,9 @@ def get_target_center_FRD_mm(tag):
         [sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx],
         [-sy,   cy*sx,             cy*cx]
     ]
+
+    R = euler_zyx_matrix(rx, ry, rz)
+    R = np.transpose(R)
 
     # Offset from tag to center (in tag's frame)
     dx, dy, dz = tag_offsets_mm[tag.id]
