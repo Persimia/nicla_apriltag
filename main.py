@@ -1,6 +1,5 @@
 """
 Todo:
-- rewrite matrix math with ulab
 - fix coordinate transformation issue
 """
 
@@ -9,8 +8,6 @@ import pymavminimal as pymav
 from machine import I2C
 from vl53l1x import VL53L1X
 from pyb import Timer
-from ulab import numpy as np
-from math import sin, cos
 
 # Setup UART
 UART_BAUDRATE = 256000
@@ -60,15 +57,17 @@ QVGA_SEARCH_IMG_AREA = qvga_x_res * qvga_y_res
 
 # Target info
 valid_tag_ids = {
-    0: 150,  # 8.5" x 11" tag black border size in mm
-    1: 77.5,  # 8.5" x 11" tag black border size in mm
-    2: 34.5,  # 8.5" x 11" tag black border size in mm
+    0: 16,  # tag black border size in mm
+    1: 32,
+    2: 64,
+    3: 128,
 }
 
 tag_offsets_mm = {
-    0: (-21.25, 104.25, 0),
-    1: (-67, -23.5, 0),
-    2: (0, 0, 0),
+    0: (0, 0, 0),
+    1: (-30, -10, 0),
+    2: (-10, -70, 0),
+    3: (110, -30, 0),
 }
 
 # Flag for heartbeat
@@ -102,42 +101,11 @@ def send_heartbeat():
 led_success = machine.LED("LED_GREEN")
 led_fail = machine.LED("LED_RED")
 
-def euler_zyx_matrix(roll, pitch, yaw):
-    """
-    Generate a rotation matrix using ZYX Euler angles (in radians).
-    - roll: rotation about X (φ)
-    - pitch: rotation about Y (θ)
-    - yaw: rotation about Z (ψ)
-    """
-    # Rotation around X (roll)
-    Rx = np.array([
-        [1, 0, 0],
-        [0, cos(roll), -sin(roll)],
-        [0, sin(roll), cos(roll)]
-    ])
-
-    # Rotation around Y (pitch)
-    Ry = np.array([
-        [cos(pitch), 0, sin(pitch)],
-        [0, 1, 0],
-        [-sin(pitch), 0, cos(pitch)]
-    ])
-
-    # Rotation around Z (yaw)
-    Rz = np.array([
-        [cos(yaw), -sin(yaw), 0],
-        [sin(yaw), cos(yaw), 0],
-        [0, 0, 1]
-    ])
-
-    # Combined rotation matrix: R = Rz * Ry * Rx
-    return np.dot(Rz, np.dot(Ry, Rx))
-
 def get_target_center_FRD_mm(tag):
     tag_size = valid_tag_ids[tag.id]
 
     # Euler angles in radians
-    rx = tag.x_rotation - math.pi
+    rx = tag.x_rotation
     ry = tag.y_rotation
     rz = tag.z_rotation
 
@@ -156,9 +124,6 @@ def get_target_center_FRD_mm(tag):
         [sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx],
         [-sy,   cy*sx,             cy*cx]
     ]
-
-    R = euler_zyx_matrix(rx, ry, rz)
-    R = np.transpose(R)
 
     # Offset from tag to center (in tag's frame)
     dx, dy, dz = tag_offsets_mm[tag.id]
@@ -304,6 +269,7 @@ while True:
             send_heartbeat()
 
         img = sensor.snapshot()
+        # img.draw_cross(int(qvga_c_x), int(qvga_c_y))
         tag_list, scale_x, scale_y = find_apriltag_optimized(img)
         tag_list = sorted(tag_list, key=lambda x: x.w * x.h, reverse=True)
         if tag_list and (tag_list[0].id in valid_tag_ids):
